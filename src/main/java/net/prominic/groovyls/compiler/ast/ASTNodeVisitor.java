@@ -276,6 +276,9 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 		classNodesByURI.clear();
 		lookup.clear();
 		unit.iterator().forEachRemaining(sourceUnit -> {
+			if (sourceUnit == null || sourceUnit.getSource() == null) {
+				return;
+			}
 			visitSourceUnit(sourceUnit);
 		});
 	}
@@ -292,6 +295,9 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 			classNodesByURI.remove(uri);
 		});
 		unit.iterator().forEachRemaining(sourceUnit -> {
+			if (sourceUnit == null || sourceUnit.getSource() == null) {
+				return;
+			}
 			URI uri = sourceUnit.getSource().getURI();
 			if (!uris.contains(uri)) {
 				return;

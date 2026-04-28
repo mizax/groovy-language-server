@@ -22,14 +22,15 @@ package net.prominic.groovyls.config;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.codehaus.groovy.control.CompilerConfiguration;
 import org.codehaus.groovy.control.SourceUnit;
@@ -67,11 +68,11 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 
 	public GroovyLSCompilationUnit create(Path workspaceRoot, FileContentsTracker fileContentsTracker) {
 		if (config == null) {
-			config = getConfiguration();
+			config = getConfiguration(workspaceRoot);
 		}
 
 		if (classLoader == null) {
-			classLoader = new GroovyClassLoader(ClassLoader.getSystemClassLoader().getParent(), config, true);
+			classLoader = new GroovyClassLoader(CompilationUnitFactory.class.getClassLoader(), config, true);
 		}
 
 		Set<URI> changedUris = fileContentsTracker.getChangedURIs();
@@ -84,6 +85,9 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 			final Set<URI> urisToRemove = changedUris;
 			List<SourceUnit> sourcesToRemove = new ArrayList<>();
 			compilationUnit.iterator().forEachRemaining(sourceUnit -> {
+				if (sourceUnit == null || sourceUnit.getSource() == null) {
+					return;
+				}
 				URI uri = sourceUnit.getSource().getURI();
 				if (urisToRemove.contains(uri)) {
 					sourcesToRemove.add(sourceUnit);
@@ -112,26 +116,23 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 		return compilationUnit;
 	}
 
-	protected CompilerConfiguration getConfiguration() {
+	protected CompilerConfiguration getConfiguration(Path workspaceRoot) {
 		CompilerConfiguration config = new CompilerConfiguration();
 
-		Map<String, Boolean> optimizationOptions = new HashMap<>();
-		optimizationOptions.put(CompilerConfiguration.GROOVYDOC, true);
-		config.setOptimizationOptions(optimizationOptions);
-
 		List<String> classpathList = new ArrayList<>();
-		getClasspathList(classpathList);
+		getClasspathList(classpathList, workspaceRoot);
 		config.setClasspathList(classpathList);
 
 		return config;
 	}
 
-	protected void getClasspathList(List<String> result) {
-		if (additionalClasspathList == null) {
+	protected void getClasspathList(List<String> result, Path workspaceRoot) {
+		List<String> entries = getConfiguredClasspathList(workspaceRoot);
+		if (entries == null) {
 			return;
 		}
 
-		for (String entry : additionalClasspathList) {
+		for (String entry : entries) {
 			boolean mustBeDirectory = false;
 			if (entry.endsWith("*")) {
 				entry = entry.substring(0, entry.length() - 1);
@@ -157,12 +158,48 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 		}
 	}
 
+	protected List<String> getConfiguredClasspathList(Path workspaceRoot) {
+		if (additionalClasspathList != null) {
+			return additionalClasspathList;
+		}
+
+		String classpathFile = System.getProperty("groovy.classpath.file");
+		if (classpathFile == null || classpathFile.trim().isEmpty()) {
+			classpathFile = System.getenv("GROOVY_LS_CLASSPATH_FILE");
+		}
+		Path classpathFilePath = null;
+		if (classpathFile != null && !classpathFile.trim().isEmpty()) {
+			classpathFilePath = Paths.get(classpathFile.trim());
+		} else if (workspaceRoot != null) {
+			classpathFilePath = workspaceRoot.resolve(".groovy-language-server-classpath");
+		}
+		if (classpathFilePath == null || !Files.isRegularFile(classpathFilePath)) {
+			return null;
+		}
+
+		try {
+			List<String> entries = new ArrayList<>();
+			for (String line : Files.readAllLines(classpathFilePath)) {
+				for (String entry : line.split(Pattern.quote(File.pathSeparator))) {
+					entry = entry.trim();
+					if (!entry.isEmpty()) {
+						entries.add(entry);
+					}
+				}
+			}
+			return entries;
+		} catch (IOException e) {
+			System.err.println("Failed to read Groovy classpath file: " + classpathFilePath);
+			return null;
+		}
+	}
+
 	protected void addDirectoryToCompilationUnit(Path dirPath, GroovyLSCompilationUnit compilationUnit,
 			FileContentsTracker fileContentsTracker, Set<URI> changedUris) {
 		try {
 			if (Files.exists(dirPath)) {
 				Files.walk(dirPath).forEach((filePath) -> {
-					if (!filePath.toString().endsWith(FILE_EXTENSION_GROOVY)) {
+					if (shouldSkipPath(dirPath, filePath) || !filePath.toString().endsWith(FILE_EXTENSION_GROOVY)) {
 						return;
 					}
 					URI fileURI = filePath.toUri();
@@ -191,6 +228,52 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 			String contents = fileContentsTracker.getContents(uri);
 			addOpenFileToCompilationUnit(uri, contents, compilationUnit);
 		});
+	}
+
+	protected boolean shouldSkipPath(Path workspaceRoot, Path filePath) {
+		Path relativePath = workspaceRoot.normalize().relativize(filePath.normalize());
+		for (String pattern : getExcludedPathPatterns(workspaceRoot)) {
+			PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+			if (matcher.matches(relativePath)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	protected List<String> getExcludedPathPatterns(Path workspaceRoot) {
+		List<String> patterns = new ArrayList<>();
+		patterns.add(".git/**");
+		patterns.add(".gradle/**");
+		patterns.add("build/**");
+		patterns.add("target/**");
+		patterns.add("node_modules/**");
+
+		String excludesFile = System.getProperty("groovy.excludes.file");
+		if (excludesFile == null || excludesFile.trim().isEmpty()) {
+			excludesFile = System.getenv("GROOVY_LS_EXCLUDES_FILE");
+		}
+		Path excludesFilePath = null;
+		if (excludesFile != null && !excludesFile.trim().isEmpty()) {
+			excludesFilePath = Paths.get(excludesFile.trim());
+		} else if (workspaceRoot != null) {
+			excludesFilePath = workspaceRoot.resolve(".groovy-language-server-excludes");
+		}
+		if (excludesFilePath == null || !Files.isRegularFile(excludesFilePath)) {
+			return patterns;
+		}
+
+		try {
+			for (String line : Files.readAllLines(excludesFilePath)) {
+				String pattern = line.trim();
+				if (!pattern.isEmpty() && !pattern.startsWith("#")) {
+					patterns.add(pattern);
+				}
+			}
+		} catch (IOException e) {
+			System.err.println("Failed to read Groovy excludes file: " + excludesFilePath);
+		}
+		return patterns;
 	}
 
 	protected void addOpenFileToCompilationUnit(URI uri, String contents, GroovyLSCompilationUnit compilationUnit) {

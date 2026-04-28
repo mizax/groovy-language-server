@@ -19,14 +19,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 package net.prominic.groovyls.compiler.util;
 
-import groovy.lang.groovydoc.Groovydoc;
+import java.lang.reflect.Method;
 
 public class GroovydocUtils {
-	public static String groovydocToMarkdownDescription(Groovydoc groovydoc) {
-		if (groovydoc == null || !groovydoc.isPresent()) {
+	public static String groovydocToMarkdownDescription(Object annotatedNode) {
+		String content = getGroovydocContent(annotatedNode);
+		if (content == null) {
 			return null;
 		}
-		String content = groovydoc.getContent();
 		String[] lines = content.split("\n");
 		StringBuilder markdownBuilder = new StringBuilder();
 		int n = lines.length;
@@ -54,6 +54,28 @@ public class GroovydocUtils {
 			}
 		}
 		return markdownBuilder.toString().trim();
+	}
+
+	private static String getGroovydocContent(Object annotatedNode) {
+		if (annotatedNode == null) {
+			return null;
+		}
+		try {
+			Method getGroovydoc = annotatedNode.getClass().getMethod("getGroovydoc");
+			Object groovydoc = getGroovydoc.invoke(annotatedNode);
+			if (groovydoc == null) {
+				return null;
+			}
+			Method isPresent = groovydoc.getClass().getMethod("isPresent");
+			if (!Boolean.TRUE.equals(isPresent.invoke(groovydoc))) {
+				return null;
+			}
+			Method getContent = groovydoc.getClass().getMethod("getContent");
+			Object content = getContent.invoke(groovydoc);
+			return content instanceof String ? (String) content : null;
+		} catch (ReflectiveOperationException | SecurityException e) {
+			return null;
+		}
 	}
 
 	private static void appendLine(StringBuilder markdownBuilder, String line) {

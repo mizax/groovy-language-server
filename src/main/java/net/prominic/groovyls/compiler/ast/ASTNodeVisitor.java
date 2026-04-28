@@ -137,6 +137,8 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 	private Map<URI, List<ASTNode>> nodesByURI = new HashMap<>();
 	private Map<URI, List<ClassNode>> classNodesByURI = new HashMap<>();
 	private Map<ASTLookupKey, ASTNodeLookupData> lookup = new HashMap<>();
+	private Map<String, List<ASTNode>> methodReferenceNodesByName = new HashMap<>();
+	private Map<URI, List<ASTNode>> methodReferenceNodesByURI = new HashMap<>();
 
 	private void pushASTNode(ASTNode node) {
 		boolean isSynthetic = false;
@@ -150,13 +152,44 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 
 			ASTNodeLookupData data = new ASTNodeLookupData();
 			data.uri = uri;
+			ASTNode parent = null;
 			if (stack.size() > 0) {
-				data.parent = stack.lastElement();
+				parent = stack.lastElement();
+				data.parent = parent;
 			}
 			lookup.put(new ASTLookupKey(node), data);
+			indexMethodReferenceCandidate(uri, node, parent);
 		}
 
 		stack.add(node);
+	}
+
+	private void indexMethodReferenceCandidate(URI uri, ASTNode node, ASTNode parent) {
+		String methodName = null;
+		if (node instanceof MethodNode) {
+			methodName = ((MethodNode) node).getName();
+		} else if (node instanceof ConstantExpression && parent instanceof MethodCallExpression) {
+			MethodCallExpression methodCallExpression = (MethodCallExpression) parent;
+			if (methodCallExpression.getMethod() == node) {
+				methodName = ((ConstantExpression) node).getText();
+			}
+		} else if (node instanceof StaticMethodCallExpression) {
+			methodName = ((StaticMethodCallExpression) node).getMethod();
+		}
+		if (methodName == null || methodName.length() == 0) {
+			return;
+		}
+		methodReferenceNodesByName.computeIfAbsent(methodName, key -> new ArrayList<>()).add(node);
+		methodReferenceNodesByURI.computeIfAbsent(uri, key -> new ArrayList<>()).add(node);
+	}
+
+	private void removeIndexedNodes(URI uri) {
+		List<ASTNode> indexedNodes = methodReferenceNodesByURI.remove(uri);
+		if (indexedNodes == null) {
+			return;
+		}
+		methodReferenceNodesByName.values().forEach(nodes -> nodes.removeAll(indexedNodes));
+		methodReferenceNodesByName.values().removeIf(List::isEmpty);
 	}
 
 	private void popASTNode() {
@@ -181,6 +214,14 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 
 	public List<ASTNode> getNodes(URI uri) {
 		List<ASTNode> nodes = nodesByURI.get(uri);
+		if (nodes == null) {
+			return Collections.emptyList();
+		}
+		return nodes;
+	}
+
+	public List<ASTNode> getMethodReferenceCandidates(String methodName) {
+		List<ASTNode> nodes = methodReferenceNodesByName.get(methodName);
 		if (nodes == null) {
 			return Collections.emptyList();
 		}
@@ -275,6 +316,8 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 		nodesByURI.clear();
 		classNodesByURI.clear();
 		lookup.clear();
+		methodReferenceNodesByName.clear();
+		methodReferenceNodesByURI.clear();
 		unit.iterator().forEachRemaining(sourceUnit -> {
 			if (sourceUnit == null || sourceUnit.getSource() == null) {
 				return;
@@ -293,6 +336,7 @@ public class ASTNodeVisitor extends ClassCodeVisitorSupport {
 				});
 			}
 			classNodesByURI.remove(uri);
+			removeIndexedNodes(uri);
 		});
 		unit.iterator().forEachRemaining(sourceUnit -> {
 			if (sourceUnit == null || sourceUnit.getSource() == null) {

@@ -139,6 +139,22 @@ public class GroovyASTUtils {
         if (definitionNode == null) {
             return Collections.emptyList();
         }
+        if (definitionNode instanceof MethodNode) {
+            MethodNode methodNode = (MethodNode) definitionNode;
+            return ast.getMethodReferenceCandidates(methodNode.getName()).stream().filter(otherNode -> {
+                if (otherNode instanceof MethodNode) {
+                    return methodNode.equals(otherNode);
+                }
+                if (otherNode instanceof ConstantExpression) {
+                    ASTNode parentNode = ast.getParent(otherNode);
+                    if (!(parentNode instanceof MethodCallExpression)) {
+                        return false;
+                    }
+                }
+                ASTNode otherDefinition = getDefinition(otherNode, false, ast);
+                return definitionNode.equals(otherDefinition) || otherDefinition == null;
+            }).collect(Collectors.toList());
+        }
         return ast.getNodes().stream().filter(otherNode -> {
             ASTNode otherDefinition = getDefinition(otherNode, false, ast);
             return definitionNode.equals(otherDefinition) && node.getLineNumber() != -1 && node.getColumnNumber() != -1;

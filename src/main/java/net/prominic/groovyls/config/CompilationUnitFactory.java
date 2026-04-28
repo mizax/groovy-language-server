@@ -43,7 +43,6 @@ import net.prominic.groovyls.util.FileContentsTracker;
 public class CompilationUnitFactory implements ICompilationUnitFactory {
 	private static final String FILE_EXTENSION_GROOVY = ".groovy";
 
-	private GroovyLSCompilationUnit compilationUnit;
 	private CompilerConfiguration config;
 	private GroovyClassLoader classLoader;
 	private List<String> additionalClasspathList;
@@ -61,7 +60,6 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 	}
 
 	public void invalidateCompilationUnit() {
-		compilationUnit = null;
 		config = null;
 		classLoader = null;
 	}
@@ -75,28 +73,8 @@ public class CompilationUnitFactory implements ICompilationUnitFactory {
 			classLoader = new GroovyClassLoader(CompilationUnitFactory.class.getClassLoader(), config, true);
 		}
 
-		Set<URI> changedUris = fileContentsTracker.getChangedURIs();
-		if (compilationUnit == null) {
-			compilationUnit = new GroovyLSCompilationUnit(config, null, classLoader);
-			// we don't care about changed URIs if there's no compilation unit yet
-			changedUris = null;
-		} else {
-			compilationUnit.setClassLoader(classLoader);
-			final Set<URI> urisToRemove = changedUris;
-			List<SourceUnit> sourcesToRemove = new ArrayList<>();
-			compilationUnit.iterator().forEachRemaining(sourceUnit -> {
-				if (sourceUnit == null || sourceUnit.getSource() == null) {
-					return;
-				}
-				URI uri = sourceUnit.getSource().getURI();
-				if (urisToRemove.contains(uri)) {
-					sourcesToRemove.add(sourceUnit);
-				}
-			});
-			// if an URI has changed, we remove it from the compilation unit so
-			// that a new version can be built from the updated source file
-			compilationUnit.removeSources(sourcesToRemove);
-		}
+		GroovyLSCompilationUnit compilationUnit = new GroovyLSCompilationUnit(config, null, classLoader);
+		Set<URI> changedUris = null;
 
 		if (workspaceRoot != null) {
 			addDirectoryToCompilationUnit(workspaceRoot, compilationUnit, fileContentsTracker, changedUris);
